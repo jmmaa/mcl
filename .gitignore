@@ -1,0 +1,12 @@
+/target
+
+
+# vscode
+
+.vscode
+
+
+# dev
+/Cargo.lock
+/bench
+/.legacy
