@@ -14,22 +14,22 @@ This
 ```
 jmmaa {
 
-	github "https://github.com/jmmaa"
+    github "https://github.com/jmmaa"
 
-	repositories 26
+    repositories 26
 
     about "\nJust Me!\n"
 }
 
 languages {
 
-	low_level {
+    low_level {
 
         rust "little"
 
     }
-
-	high_level {
+    
+    high_level {
 
         python "fluent"
 
