@@ -1,14 +1,43 @@
 use std;
+
 use std::error::Error;
 
 #[derive(Debug)]
-pub enum Token<'a> {
-    Keyword(&'a str),
-    Str(&'a str),
-    String(String),
-    Boolean(bool),
-    Integer(i64),
-    Float(f64),
+pub struct Pos {
+    pub line: usize,
+    pub column: usize,
+    pub index: usize,
+}
+
+#[derive(Debug)]
+pub struct Loc {
+    pub start: Pos,
+    pub end: Pos,
+}
+
+#[derive(Debug)]
+pub struct Token<'a> {
+    pub loc: Loc,
+    pub raw: &'a [u8],
+}
+
+#[derive(Debug)]
+pub enum LiteralKind<'a> {
+    String(Token<'a>),
+    Int(Token<'a>),
+    Float(Token<'a>),
+    Bool(Token<'a>),
+}
+
+#[derive(Debug)]
+pub enum KeywordKind<'a> {
+    String(Token<'a>),
+    True(Token<'a>),
+    False(Token<'a>),
+}
+
+#[derive(Debug)]
+pub enum DelimiterKind {
     TableTerm,
     TablePrec,
     ListPrec,
@@ -16,8 +45,15 @@ pub enum Token<'a> {
 }
 
 #[derive(Debug)]
+pub enum TokenKind<'a> {
+    Keyword(KeywordKind<'a>),
+    Literal(LiteralKind<'a>),
+    Delimiter(DelimiterKind),
+}
+
+#[derive(Debug)]
 pub struct TokenizerError {
-    pub description: String,
+    pub desc: String,
 }
 
 impl std::fmt::Display for TokenizerError {
@@ -28,276 +64,367 @@ impl std::fmt::Display for TokenizerError {
 
 impl Error for TokenizerError {
     fn description(&self) -> &str {
-        self.description.as_str()
+        self.desc.as_str()
     }
 }
 
-fn ascii_to_float(_bytes: &[u8]) -> Result<f64, TokenizerError> {
-    let float_str = std::str::from_utf8(_bytes);
-
-    match float_str {
-        Ok(str) => match str.parse::<f64>() {
-            Ok(v) => Ok(v),
-            Err(e) => Err(TokenizerError {
-                description: format!("error converting to float: {:?} value: {str}", e),
-            }),
-        },
-        Err(e) => Err(TokenizerError {
-            description: format!("error converting to float: {:?}", e),
-        }),
-    }
-}
-
-fn ascii_to_int(_bytes: &[u8]) -> Result<i64, TokenizerError> {
-    let float_str = std::str::from_utf8(_bytes);
-
-    match float_str {
-        Ok(str) => match str.parse::<i64>() {
-            Ok(v) => Ok(v),
-            Err(e) => Err(TokenizerError {
-                description: format!("error converting to int: {:?} value: {str}", e),
-            }),
-        },
-        Err(e) => Err(TokenizerError {
-            description: format!("error converting to int: {:?}", e),
-        }),
-    }
-}
-
-fn unescape_bytes(_bytes: &[u8]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(_bytes.len());
-    let mut chars = _bytes.iter().peekable();
-    while let Some(&c) = chars.next() {
-        match c {
-            b'\\' => {
-                if let Some(&&b) = chars.peek() {
-                    chars.next();
-
-                    match b {
-                        b'"' => output.push(b'"'),
-                        b'\'' => output.push(b'\''),
-                        b'\\' => output.push(b'\\'),
-                        b'n' => output.push(b'\n'),
-                        b'r' => output.push(b'\r'),
-                        b't' => output.push(b'\t'),
-                        b'0' => output.push(b'\0'),
-                        _ => output.push(b'\\'),
-                    }
-                }
-            }
-            _ => output.push(c),
-        }
-    }
-
-    output
-}
-
-pub struct Tokenizer<'a> {
-    inp: &'a [u8],
-    start: usize,
+#[derive(Default)]
+pub struct Tokenizer {
+    index: usize,
+    column: usize,
     line: usize,
-    pos: usize,
 }
 
-impl<'a> Tokenizer<'a> {
-    pub fn new(inp: &'a [u8]) -> Self {
-        Tokenizer {
-            inp,
-            start: 0,
-            pos: 0,
-            line: 0,
+impl Tokenizer {
+    #[inline]
+    fn index(&self) -> usize {
+        self.index
+    }
+
+    #[inline]
+    fn column(&self) -> usize {
+        self.column
+    }
+
+    #[inline]
+    fn line(&self) -> usize {
+        self.line
+    }
+
+    #[inline]
+    fn next(&mut self) {
+        self.index += 1;
+        self.column += 1;
+    }
+
+    #[inline]
+    fn next_line(&mut self) {
+        self.line += 1;
+        self.column = 1;
+        self.index += 1;
+    }
+
+    #[inline]
+    fn position(&self) -> Pos {
+        Pos {
+            line: self.line(),
+            column: self.column(),
+            index: self.index(),
         }
     }
 
-    #[inline(always)]
-    fn advance(&mut self) {
-        self.pos += 1
-    }
+    fn keyword<'a>(&mut self, source: &'a [u8]) -> Result<TokenKind<'a>, TokenizerError> {
+        let start = self.position();
 
-    #[inline(always)]
-    fn string(&mut self) -> Result<Token<'a>, TokenizerError> {
-        self.advance(); // skip opening double quote
-        self.start = self.pos;
-
-        loop {
-            if let Some(&b) = self.inp.get(self.pos) {
-                if b == b'"' {
-                    break;
-                }
-
-                if b != b'\n' {
-                    self.advance();
-                } else {
-                    return Err(TokenizerError {
-                        description: "cannot use newline character in strings".to_string(),
-                    });
-                }
-            } else {
-                return Err(TokenizerError {
-                    description: "unterminated string".to_string(),
-                });
-            }
-        }
-
-        let to_resolve = &self.inp[self.start..self.pos];
-
-        self.advance(); // skip closing double quote
-
-        if to_resolve.contains(&b'\\') {
-            match String::from_utf8(unescape_bytes(to_resolve)) {
-                Ok(s) => Ok(Token::String(s)),
-                Err(e) => Err(TokenizerError {
-                    description: format!("could not resolve string caused by: {:?}", e),
-                }),
-            }
-        } else {
-            match std::str::from_utf8(to_resolve) {
-                Ok(s) => Ok(Token::Str(s)),
-                Err(e) => Err(TokenizerError {
-                    description: format!("could not resolve str caused by: {:?}", e),
-                }),
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn number(&mut self) -> Result<Token<'a>, TokenizerError> {
-        let mut point = false;
-        let mut zero = false;
-
-        if let Some(b) = self.inp.get(self.pos) {
-            if *b == b'0' {
-                zero = true;
-            }
-        }
-
-        // let start_index = self.pos;
-
-        self.start = self.pos;
-        self.advance();
-
-        while let Some(b) = self.inp.get(self.pos) {
-            if b.is_ascii_digit() && !zero {
-                self.advance();
-            } else if *b == b'.' && !point {
-                point = true;
-                zero = false;
-
-                self.advance();
-
-                if let Some(b) = self.inp.get(self.pos) {
-                    if !b.is_ascii_digit() {
-                        return Err(TokenizerError {
-                            description: format!(
-                                "decimal point must be followed with a digit, not {}",
-                                b
-                            ),
-                        });
-                    }
-                } else {
-                    return Err(TokenizerError {
-                        description:
-                            "decimal point must be followed with a digit, but no bytes left"
-                                .to_string(),
-                    });
-                }
-            } else {
-                break;
-            }
-        }
-
-        let to_resolve = &self.inp[self.start..self.pos];
-
-        if point {
-            match ascii_to_float(to_resolve) {
-                Ok(v) => Ok(Token::Float(v)),
-                Err(e) => Err(e),
-            }
-        } else {
-            match ascii_to_int(to_resolve) {
-                Ok(v) => Ok(Token::Integer(v)),
-                Err(e) => Err(e),
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn keyword(&mut self) -> Result<Token<'a>, TokenizerError> {
-        self.start = self.pos;
-
-        while let Some(b) = self.inp.get(self.pos) {
+        while let Some(b) = source.get(self.index()) {
             if !(b.is_ascii_alphanumeric() || *b == b'_') {
                 break;
             }
 
-            self.advance();
+            self.next();
         }
 
-        match std::str::from_utf8(&self.inp[self.start..self.pos]) {
-            Ok(kw) => match kw {
-                // reserved
-                "true" => Ok(Token::Boolean(true)),
-                "false" => Ok(Token::Boolean(false)),
+        let end = self.position();
 
-                _ => Ok(Token::Keyword(kw)),
+        let raw = &source[start.index..end.index];
+
+        match raw {
+            b"true" => Ok(TokenKind::Keyword(KeywordKind::True(Token {
+                loc: Loc { start, end },
+                raw,
+            }))),
+
+            b"false" => Ok(TokenKind::Keyword(KeywordKind::False(Token {
+                loc: Loc { start, end },
+                raw,
+            }))),
+
+            _ => Ok(TokenKind::Keyword(KeywordKind::String(Token {
+                loc: Loc { start, end },
+                raw,
+            }))),
+        }
+    }
+
+    fn number<'a>(&mut self, source: &'a [u8]) -> Result<TokenKind<'a>, TokenizerError> {
+        let mut point = false;
+        let mut zero = false;
+
+        if let Some(&b) = source.get(self.index()) {
+            if b == b'0' {
+                zero = true;
+            }
+        }
+
+        let start = self.position();
+
+        self.next(); // skip opening first digit
+
+        while let Some(&b) = source.get(self.index()) {
+            if b.is_ascii_digit() && !zero {
+                self.next()
+            } else if b == b'.' && !point {
+                point = true;
+                zero = false;
+
+                self.next();
+
+                if let Some(b) = source.get(self.index()) {
+                    if !b.is_ascii_digit() {
+                        return Err(TokenizerError {
+                            desc: format!("decimal point must be followed with a digit, not {}", b),
+                        });
+                    }
+                } else {
+                    return Err(TokenizerError {
+                        desc: "decimal point must be followed with a digit, but no bytes left"
+                            .to_string(),
+                    });
+                }
+            } else {
+                break;
+            }
+        }
+
+        let end = self.position();
+        let raw = &source[start.index..end.index];
+
+        if point {
+            Ok(TokenKind::Literal(LiteralKind::Float(Token {
+                loc: Loc { start, end },
+                raw,
+            })))
+        } else {
+            Ok(TokenKind::Literal(LiteralKind::Int(Token {
+                loc: Loc { start, end },
+                raw,
+            })))
+        }
+    }
+
+    fn template_string<'a>(&mut self, source: &'a [u8]) -> Result<TokenKind<'a>, TokenizerError> {
+        self.next(); // skip opening tilde
+
+        let start = self.position();
+
+        while let Some(&b) = source.get(self.index()) {
+            match b {
+                b'`' => break,
+                _ => {
+                    self.next();
+                }
+            }
+        }
+
+        if source.get(self.index()).is_none() {
+            return Err(TokenizerError {
+                desc: "unterminated mutli line string".to_string(),
+            });
+        }
+
+        let end = self.position();
+
+        self.next(); // skip closing tilde
+
+        let raw = &source[start.index..end.index];
+
+        Ok(TokenKind::Literal(LiteralKind::String(Token {
+            loc: Loc { start, end },
+            raw,
+        })))
+    }
+
+    fn string<'a>(&mut self, source: &'a [u8]) -> Result<TokenKind<'a>, TokenizerError> {
+        self.next(); // skip opening double quotes
+
+        let start = self.position();
+
+        while let Some(&b) = source.get(self.index()) {
+            match b {
+                b'"' => break,
+                b'\n' => {
+                    return Err(TokenizerError {
+                        desc: "cannot use newline character in strings".to_string(),
+                    })
+                }
+                _ => self.next(),
+            }
+        }
+
+        if source.get(self.index()).is_none() {
+            return Err(TokenizerError {
+                desc: "unterminated string".to_string(),
+            });
+        }
+
+        let end = self.position();
+
+        self.next(); // skip closing double quotes
+
+        let raw = &source[start.index..end.index];
+
+        Ok(TokenKind::Literal(LiteralKind::String(Token {
+            loc: Loc { start, end },
+            raw,
+        })))
+    }
+
+    fn ignore_comment(&mut self, source: &[u8]) -> Result<(), TokenizerError> {
+        let start = self.position();
+
+        self.next(); // skip identifier forward slash
+
+        loop {
+            if let Some(&b) = source.get(self.index()) {
+                if b == b'\n' {
+                    break;
+                } else {
+                    self.next();
+                }
+            } else {
+                return Err(TokenizerError {
+                    desc: format!("unterminated comment ({}:{})", start.line, start.column),
+                });
+            }
+        }
+
+        self.next_line();
+
+        Ok(())
+    }
+
+    fn ignore_multiline_comment(&mut self, source: &[u8]) -> Result<(), TokenizerError> {
+        let start = self.position();
+
+        self.next(); // skip preceding opening slash
+
+        loop {
+            if let Some(&b) = source.get(self.index()) {
+                if b == b'*' {
+                    self.next();
+                    if let Some(b'/') = source.get(self.index()) {
+                        // skip closing right slash
+                        self.next();
+                        break;
+                    }
+                } else if b == b'\n' {
+                    self.next_line();
+                } else {
+                    self.next();
+                }
+            } else {
+                return Err(TokenizerError {
+                    desc: format!("unterminated comment ({}:{})", start.line, start.column),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn comment(&mut self, source: &[u8]) -> Result<(), TokenizerError> {
+        let start = self.position(); // save start position
+
+        self.next(); // skip preceding opening slash
+
+        match source.get(self.index()) {
+            Some(b'/') => match self.ignore_comment(source) {
+                Ok(()) => Ok(()),
+                Err(e) => Err(e),
             },
 
-            Err(e) => Err(TokenizerError {
-                description: format!("failed to resolve keyword caused by {}", e),
+            Some(b'*') => match self.ignore_multiline_comment(source) {
+                Ok(()) => Ok(()),
+                Err(e) => Err(e),
+            },
+            Some(c) => Err(TokenizerError {
+                desc: format!(
+                    "expected '/' or '*' not '{}' ({}:{})",
+                    *c as char,
+                    self.line(),
+                    self.column()
+                ),
+            }),
+
+            None => Err(TokenizerError {
+                desc: format!(
+                    "expected '/' or '*' but no bytes left ({}:{})",
+                    start.line, start.column
+                ),
             }),
         }
     }
 
-    #[inline(always)]
-    pub fn create_tokens(&mut self) -> Result<Vec<Token<'a>>, TokenizerError> {
-        let mut tokens = Vec::new();
+    pub fn new() -> Self {
+        Tokenizer {
+            index: 0,
+            column: 1,
+            line: 1,
+        }
+    }
 
-        while let Some(b) = self.inp.get(self.pos) {
+    pub fn tokenize<'a>(&mut self, source: &'a [u8]) -> Result<Vec<TokenKind<'a>>, TokenizerError> {
+        let mut tokens = Vec::with_capacity(std::mem::size_of_val(source));
+
+        while let Some(b) = source.get(self.index()) {
             match b {
                 b'{' => {
-                    tokens.push(Token::TablePrec);
-                    self.advance();
+                    tokens.push(TokenKind::Delimiter(DelimiterKind::TablePrec));
+                    self.next();
                 }
                 b'}' => {
-                    tokens.push(Token::TableTerm);
-                    self.advance();
+                    tokens.push(TokenKind::Delimiter(DelimiterKind::TableTerm));
+                    self.next();
                 }
                 b'[' => {
-                    tokens.push(Token::ListPrec);
-                    self.advance();
+                    tokens.push(TokenKind::Delimiter(DelimiterKind::ListPrec));
+                    self.next();
                 }
                 b']' => {
-                    tokens.push(Token::ListTerm);
-                    self.advance();
+                    tokens.push(TokenKind::Delimiter(DelimiterKind::ListTerm));
+                    self.next();
                 }
-                b'\n' => {
-                    self.line += 1;
-                    self.advance();
-                }
-                b'\r' | b'\t' | b' ' => self.advance(), // skip whitespaces,
+                b'\n' => self.next_line(),
+
+                // skip whitespaces
+                b'\r' | b'\t' | b' ' => self.next(),
 
                 // Keyword
-                b'a'..=b'z' | b'A'..=b'Z' => match self.keyword() {
-                    Ok(kw) => tokens.push(kw),
+                b'a'..=b'z' | b'A'..=b'Z' => match self.keyword(source) {
+                    Ok(t) => tokens.push(t),
                     Err(e) => return Err(e),
                 },
 
                 // String
-                b'"' => match self.string() {
-                    Ok(s) => tokens.push(s),
+                b'"' => match self.string(source) {
+                    Ok(t) => tokens.push(t),
                     Err(e) => return Err(e),
                 },
 
-                // Integer | Float
-                b'0'..=b'9' | b'+' | b'-' => match self.number() {
-                    Ok(num) => tokens.push(num),
+                // Template String
+                b'`' => match self.template_string(source) {
+                    Ok(t) => tokens.push(t),
+                    Err(e) => return Err(e),
+                },
+
+                // Int | Float
+                b'0'..=b'9' | b'+' | b'-' => match self.number(source) {
+                    Ok(t) => tokens.push(t),
+                    Err(e) => return Err(e),
+                },
+
+                // Comments
+                b'/' => match self.comment(source) {
+                    Ok(()) => {}
                     Err(e) => return Err(e),
                 },
                 _ => {
                     return Err(TokenizerError {
-                        description: format!(
-                            "unrecognized character '{}' line: {}",
-                            *b as char, self.line
+                        desc: format!(
+                            "unrecognized character '{}' ({}:{})",
+                            *b as char,
+                            self.line(),
+                            self.column(),
                         ),
                     })
                 }

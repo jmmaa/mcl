@@ -10,3 +10,4 @@
 /Cargo.lock
 /bench
 /.legacy
+features.txt

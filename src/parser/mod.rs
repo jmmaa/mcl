@@ -1,30 +1,88 @@
-use crate::tokenizer::Token;
-
-use ahash::AHashMap;
+use crate::tokenizer::{DelimiterKind, KeywordKind, LiteralKind, TokenKind};
+use std::collections::HashMap;
 
 use std::{error::Error, fmt::Display};
 
-#[derive(Debug, Eq, Hash, PartialEq)]
-pub enum KeyKind<'a> {
-    String(&'a String),
-    Integer(&'a i64),
-    Str(&'a str),
+#[inline(always)]
+fn bytes_slice_to_str(_bytes: &[u8]) -> &str {
+    unsafe { std::str::from_utf8_unchecked(_bytes) }
+}
+
+#[inline(always)]
+fn bytes_slice_to_string(_bytes: &[u8]) -> String {
+    unsafe { String::from_utf8_unchecked(_bytes.to_vec()) }
+}
+
+#[inline(always)]
+fn bytes_to_float(_bytes: &[u8]) -> ParserResult<f64> {
+    let float_str = bytes_slice_to_str(_bytes);
+
+    match float_str.parse::<f64>() {
+        Ok(v) => Ok(v),
+        Err(e) => Err(ParserError {
+            desc: format!("error converting to float: {:?} value: {float_str}", e),
+        }),
+    }
+}
+
+#[inline(always)]
+fn bytes_to_int(_bytes: &[u8]) -> ParserResult<i64> {
+    let int_str = bytes_slice_to_str(_bytes);
+
+    match int_str.parse::<i64>() {
+        Ok(v) => Ok(v),
+        Err(e) => Err(ParserError {
+            desc: format!("error converting to float: {:?} value: {int_str}", e),
+        }),
+    }
+}
+
+#[inline(always)]
+fn unescape_bytes_string(_bytes: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(_bytes.len());
+    let mut chars = _bytes.iter();
+
+    while let Some(&c) = chars.next() {
+        match c {
+            b'\\' => {
+                if let Some(&b) = chars.next() {
+                    match b {
+                        b'n' => output.push(b'\n'),
+                        b'r' => output.push(b'\r'),
+                        b't' => output.push(b'\t'),
+                        b'"' => output.push(b),
+                        b'\'' => output.push(b),
+                        b'\\' => output.push(b),
+                        _ => output.push(b),
+                    }
+                }
+            }
+            _ => output.push(c),
+        }
+    }
+
+    output
 }
 
 #[derive(Debug)]
-pub enum ValueKind<'a> {
-    Table(AHashMap<KeyKind<'a>, ValueKind<'a>>),
-    List(Vec<ValueKind<'a>>),
-    String(&'a String),
-    Boolean(&'a bool),
-    Integer(&'a i64),
-    Float(&'a f64),
-    Str(&'a str),
+pub enum Value {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+    List(List),
+    Table(Table),
 }
+
+pub type List = Vec<Value>;
+
+pub type Table = HashMap<String, Value>;
+
+pub type ParserResult<T> = Result<T, ParserError>;
 
 #[derive(Debug)]
 pub struct ParserError {
-    pub description: String,
+    pub desc: String,
 }
 
 impl Display for ParserError {
@@ -35,195 +93,208 @@ impl Display for ParserError {
 
 impl Error for ParserError {
     fn description(&self) -> &str {
-        self.description.as_str()
+        self.desc.as_str()
     }
 }
 
-pub struct Parser<'a> {
-    tokens: &'a [Token<'a>],
-    pos: usize,
+#[derive(Default, Debug)]
+pub struct Parser {
+    index: usize,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(tokens: &'a [Token<'a>]) -> Self {
-        Parser { tokens, pos: 0 }
+impl Parser {
+    #[inline]
+    fn index(&self) -> usize {
+        self.index
     }
 
-    #[inline(always)]
-    fn advance(&mut self) {
-        self.pos += 1;
+    #[inline]
+    fn next(&mut self) {
+        self.index += 1;
     }
 
-    pub fn create_tree(&mut self) -> Result<ValueKind<'a>, ParserError> {
-        let token = self.tokens.get(self.pos); // peek
+    pub fn new() -> Self {
+        Parser { index: 0 }
+    }
 
-        match token {
-            Some(Token::TablePrec) => match self.create_table() {
-                Ok(tbl) => Ok(ValueKind::Table(tbl)),
-                Err(e) => Err(e),
-            },
-            Some(Token::ListPrec) => match self.create_list() {
-                Ok(ls) => Ok(ValueKind::List(ls)),
-                Err(e) => Err(e),
-            },
-            Some(Token::Keyword(_)) => {
-                let mut values = AHashMap::new();
+    pub fn parse(&mut self, tokens: &[TokenKind]) -> ParserResult<Value> {
+        match tokens.get(self.index()) {
+            Some(token) => match token {
+                TokenKind::Delimiter(DelimiterKind::TablePrec) => match self.create_table(tokens) {
+                    Ok(tbl) => Ok(Value::Table(tbl)),
+                    Err(e) => Err(e),
+                },
+                TokenKind::Delimiter(DelimiterKind::ListPrec) => match self.create_list(tokens) {
+                    Ok(ls) => Ok(Value::List(ls)),
+                    Err(e) => Err(e),
+                },
+                TokenKind::Keyword(KeywordKind::String(_)) => {
+                    let mut values = HashMap::new();
 
-                while self.tokens.get(self.pos).is_some() {
-                    match self.create_key_value_pair() {
-                        Ok((k, v)) => {
-                            values.insert(k, v);
-                        }
-                        Err(e) => return Err(e),
+                    while tokens.get(self.index()).is_some() {
+                        let key = self.create_key(tokens)?;
+                        self.next();
+                        let value = self.create_value(tokens)?;
+                        self.next();
+
+                        values.insert(key, value);
                     }
+
+                    Ok(Value::Table(values))
                 }
+                _ => {
+                    let mut values = Vec::new();
 
-                Ok(ValueKind::Table(values))
-            }
-            Some(_) => {
-                let mut values = Vec::new();
+                    while tokens.get(self.index()).is_some() {
+                        let value = self.create_value(tokens)?;
 
-                while self.tokens.get(self.pos).is_some() {
-                    match self.create_value() {
-                        Ok(v) => {
-                            values.push(v);
-                        }
-                        Err(e) => return Err(e),
+                        self.next();
+
+                        values.push(value);
                     }
-                }
 
-                Ok(ValueKind::List(values))
-            }
+                    Ok(Value::List(values))
+                }
+            },
             None => Err(ParserError {
-                description: "ran out of tokens".to_string(),
+                desc: "ran out of tokens".to_string(),
             }),
         }
     }
 
-    #[inline(always)]
-    pub fn create_list(&mut self) -> Result<Vec<ValueKind<'a>>, ParserError> {
-        let mut values = Vec::new();
+    pub fn create_value<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> Result<Value, ParserError> {
+        if let Some(token) = tokens.get(self.index()) {
+            match token {
+                TokenKind::Keyword(KeywordKind::True(_)) => Ok(Value::Boolean(true)),
 
-        while let Some(b) = self.tokens.get(self.pos) {
-            match b {
-                Token::ListTerm => {
-                    self.advance();
-                    break;
-                }
-                _ => match self.create_value() {
-                    Ok(v) => {
-                        values.push(v);
+                TokenKind::Keyword(KeywordKind::String(tok)) => {
+                    if tok.raw.contains(&b'\\') {
+                        let unescaped = unescape_bytes_string(tok.raw);
+                        let result = bytes_slice_to_string(&unescaped);
+                        Ok(Value::String(result))
+                    } else {
+                        let result = bytes_slice_to_string(tok.raw);
+                        Ok(Value::String(result))
                     }
-                    Err(e) => return Err(e),
+                }
+
+                TokenKind::Literal(LiteralKind::String(tok)) => {
+                    if tok.raw.contains(&b'\\') {
+                        let unescaped = unescape_bytes_string(tok.raw);
+                        let result = bytes_slice_to_string(&unescaped);
+                        Ok(Value::String(result))
+                    } else {
+                        let result = bytes_slice_to_string(tok.raw);
+                        Ok(Value::String(result))
+                    }
+                }
+
+                TokenKind::Literal(LiteralKind::Float(tok)) => match bytes_to_float(tok.raw) {
+                    Ok(v) => Ok(Value::Float(v)),
+                    Err(e) => Err(e),
                 },
-            }
-        }
 
-        Ok(values)
-    }
-
-    #[inline(always)]
-    pub fn create_table(&mut self) -> Result<AHashMap<KeyKind<'a>, ValueKind<'a>>, ParserError> {
-        let mut values = AHashMap::new();
-
-        while let Some(b) = self.tokens.get(self.pos) {
-            match b {
-                Token::TableTerm => {
-                    self.advance();
-                    break;
-                }
-                _ => match self.create_key_value_pair() {
-                    Ok((k, v)) => {
-                        values.insert(k, v);
-                    }
-                    Err(e) => return Err(e),
+                TokenKind::Literal(LiteralKind::Int(tok)) => match bytes_to_int(tok.raw) {
+                    Ok(v) => Ok(Value::Integer(v)),
+                    Err(e) => Err(e),
                 },
-            }
-        }
 
-        Ok(values)
-    }
+                TokenKind::Delimiter(DelimiterKind::TablePrec) => {
+                    self.next(); // skip opening "{"
 
-    #[inline(always)]
-    pub fn create_key_value_pair(&mut self) -> Result<(KeyKind<'a>, ValueKind<'a>), ParserError> {
-        if let Some(b) = self.tokens.get(self.pos) {
-            match b {
-                Token::Keyword(key) => {
-                    self.advance();
-
-                    match self.create_value() {
-                        Ok(value) => Ok((KeyKind::Str(key), value)),
-                        Err(e) => Err(e),
-                    }
-                }
-                Token::String(key) => {
-                    self.advance();
-
-                    match self.create_value() {
-                        Ok(value) => Ok((KeyKind::String(key), value)),
-                        Err(e) => Err(e),
+                    match self.create_table(tokens) {
+                        Ok(table) => Ok(Value::Table(table)),
+                        Err(e) => Err(ParserError {
+                            desc: format!("failed creating a table because of {}", e.desc),
+                        }),
                     }
                 }
 
-                Token::Integer(key) => {
-                    self.advance();
+                TokenKind::Delimiter(DelimiterKind::ListPrec) => {
+                    self.next(); // skip opening "["
 
-                    match self.create_value() {
-                        Ok(value) => Ok((KeyKind::Integer(key), value)),
-                        Err(e) => Err(e),
+                    match self.create_list(tokens) {
+                        Ok(ls) => Ok(Value::List(ls)),
+                        Err(e) => Err(ParserError {
+                            desc: format!("failed creating a list because of {}", e.desc),
+                        }),
                     }
                 }
 
                 token => Err(ParserError {
-                    description: format!("invalid key '{:?}' for key-value-pair", token),
+                    desc: format!("invalid value '{:?}'", token),
                 }),
             }
         } else {
             Err(ParserError {
-                description: "expected a key".to_string(),
+                desc: "ran out of tokens".to_string(),
             })
         }
     }
 
-    #[inline(always)]
-    pub fn create_value(&mut self) -> Result<ValueKind<'a>, ParserError> {
-        if let Some(token) = self.tokens.get(self.pos) {
-            self.advance();
+    pub fn create_list<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<Vec<Value>> {
+        let mut values = Vec::new();
 
+        while let Some(token) = tokens.get(self.index()) {
             match token {
-                Token::Float(value) => Ok(ValueKind::Float(value)),
+                TokenKind::Delimiter(DelimiterKind::ListTerm) => break,
+                _ => {
+                    let value = self.create_value(tokens)?;
 
-                Token::Boolean(value) => Ok(ValueKind::Boolean(value)),
+                    self.next();
 
-                Token::Integer(value) => Ok(ValueKind::Integer(value)),
+                    values.push(value);
+                }
+            }
+        }
 
-                Token::String(value) => Ok(ValueKind::String(value)),
+        Ok(values)
+    }
 
-                Token::Str(value) => Ok(ValueKind::Str(value)),
+    pub fn create_table<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<Table> {
+        let mut values = HashMap::new();
 
-                Token::TablePrec => match self.create_table() {
-                    Ok(table) => Ok(ValueKind::Table(table)),
-                    Err(e) => Err(ParserError {
-                        description: format!(
-                            "failed creating a table because of {}",
-                            e.description
-                        ),
-                    }),
-                },
-                Token::ListPrec => match self.create_list() {
-                    Ok(ls) => Ok(ValueKind::List(ls)),
-                    Err(e) => Err(ParserError {
-                        description: format!("failed creating a list because of {}", e.description),
-                    }),
-                },
+        while let Some(token) = tokens.get(self.index()) {
+            match token {
+                TokenKind::Delimiter(DelimiterKind::TableTerm) => break,
 
-                _ => Err(ParserError {
-                    description: format!("invalid value '{:?}'", token),
+                _ => {
+                    let key = self.create_key(tokens)?;
+
+                    self.next();
+
+                    let value = self.create_value(tokens)?;
+
+                    self.next();
+
+                    values.insert(key, value);
+                }
+            }
+        }
+
+        Ok(values)
+    }
+
+    pub fn create_key<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<String> {
+        if let Some(token) = tokens.get(self.index()) {
+            match token {
+                TokenKind::Literal(LiteralKind::String(tok)) => {
+                    let result = bytes_slice_to_string(tok.raw);
+                    Ok(result)
+                }
+
+                TokenKind::Keyword(KeywordKind::String(tok)) => {
+                    let result = bytes_slice_to_string(tok.raw);
+                    Ok(result)
+                }
+
+                token => Err(ParserError {
+                    desc: format!("invalid key '{:?}'", token),
                 }),
             }
         } else {
             Err(ParserError {
-                description: "ran out of tokens".to_string(),
+                desc: "expected a key".to_string(),
             })
         }
     }

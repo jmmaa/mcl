@@ -1,0 +1,25 @@
+jmmaa {
+
+	github "https://github.com/jmmaa"
+
+	repositories 26
+
+    about "\nJust Me!\n"
+}
+
+languages {
+
+	low_level {
+
+        rust "little"
+
+    }
+
+	high_level {
+
+        python "fluent"
+
+        typescript "fluent"
+    }
+
+}

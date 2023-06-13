@@ -1,6 +1,6 @@
 # Marky's Configuration Language (MCL)
 
-Its an easy to use config toy language written in rust.
+Its an easy to use config toy language written in rust. I implemented this solely for practicing rust lifetimes.
 
 
 **Note: Still in development**
@@ -45,20 +45,30 @@ translates to
 ```rust
 // its unordered!
 
-Table({
-    Str("languages"): Table({
-        Str("low_level"): Table({
-            Str("rust"): Str("little")
-        }), 
-        Str("high_level"): Table({
-            Str("typescript"): Str("fluent"), 
-            Str("python"): Str("fluent")
-        })
-    }), 
-    Str("jmmaa"): Table({
-        Str("about"): String("\nJust Me!\n"),
-        Str("repositories"): Integer(26),
-        Str("github"): Str("https://github.com/jmmaa")
-    })
-})
+Table(
+    {
+        "jmmaa": Table(
+            {
+                "about": String("\nJust Me!\n"),
+                "repositories": Integer(26),
+                "github": String("https://github.com/jmmaa")
+            }
+        ),
+        "languages": Table(
+            {
+                "low_level": Table(
+                    {
+                        "rust": String("little")
+                    }
+                ),
+                "high_level": Table(
+                    {
+                        "typescript": String("fluent"),
+                        "python": String("fluent")
+                    }
+                )
+            }
+        )
+    }
+)
 ```
