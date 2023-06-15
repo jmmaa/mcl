@@ -209,6 +209,11 @@ impl Tokenizer {
 
         while let Some(&b) = source.get(self.index()) {
             match b {
+                b'\\' => {
+                    // escape char
+                    self.next();
+                    self.next();
+                }
                 b'`' => break,
                 _ => {
                     self.next();

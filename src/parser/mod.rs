@@ -53,6 +53,7 @@ fn unescape_bytes_string(_bytes: &[u8]) -> Vec<u8> {
                         b'"' => output.push(b),
                         b'\'' => output.push(b),
                         b'\\' => output.push(b),
+                        b'`' => output.push(b),
                         _ => output.push(b),
                     }
                 }
