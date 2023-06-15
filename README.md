@@ -78,7 +78,7 @@ Table(
 
 ```rust
 
-use mcl::parser::{Parser, Tokenizer};
+use mcl::{Parser, Tokenizer};
 
 fn main() {
 
