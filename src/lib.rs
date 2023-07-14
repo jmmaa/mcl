@@ -1,5 +1,5 @@
+pub mod lexer;
 pub mod parser;
-pub mod tokenizer;
 
+pub use lexer::Lexer;
 pub use parser::Parser;
-pub use tokenizer::Tokenizer;

@@ -1,4 +1,4 @@
-use crate::tokenizer::{DelimiterKind, KeywordKind, LiteralKind, TokenKind};
+use crate::lexer::{DelimiterKind, KeywordKind, LiteralKind, TokenKind};
 use std::collections::HashMap;
 
 use std::{error::Error, fmt::Display};
@@ -121,14 +121,8 @@ impl Parser {
     pub fn parse(&mut self, tokens: &[TokenKind]) -> ParserResult<Value> {
         match tokens.get(self.index()) {
             Some(token) => match token {
-                TokenKind::Delimiter(DelimiterKind::TablePrec) => match self.create_table(tokens) {
-                    Ok(tbl) => Ok(Value::Table(tbl)),
-                    Err(e) => Err(e),
-                },
-                TokenKind::Delimiter(DelimiterKind::ListPrec) => match self.create_list(tokens) {
-                    Ok(ls) => Ok(Value::List(ls)),
-                    Err(e) => Err(e),
-                },
+                TokenKind::Delimiter(DelimiterKind::TablePrec) => self.create_table(tokens),
+                TokenKind::Delimiter(DelimiterKind::ListPrec) => self.create_list(tokens),
                 TokenKind::Keyword(KeywordKind::String(_)) => {
                     let mut values = HashMap::new();
 
@@ -148,7 +142,6 @@ impl Parser {
 
                     while tokens.get(self.index()).is_some() {
                         let value = self.create_value(tokens)?;
-
                         self.next();
 
                         values.push(value);
@@ -163,7 +156,7 @@ impl Parser {
         }
     }
 
-    pub fn create_value<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> Result<Value, ParserError> {
+    pub fn create_value<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<Value> {
         if let Some(token) = tokens.get(self.index()) {
             match token {
                 TokenKind::Keyword(KeywordKind::True(_)) => Ok(Value::Boolean(true)),
@@ -204,7 +197,7 @@ impl Parser {
                     self.next(); // skip opening "{"
 
                     match self.create_table(tokens) {
-                        Ok(table) => Ok(Value::Table(table)),
+                        Ok(tbl) => Ok(tbl),
                         Err(e) => Err(ParserError {
                             desc: format!("failed creating a table because of {}", e.desc),
                         }),
@@ -215,7 +208,7 @@ impl Parser {
                     self.next(); // skip opening "["
 
                     match self.create_list(tokens) {
-                        Ok(ls) => Ok(Value::List(ls)),
+                        Ok(ls) => Ok(ls),
                         Err(e) => Err(ParserError {
                             desc: format!("failed creating a list because of {}", e.desc),
                         }),
@@ -233,7 +226,7 @@ impl Parser {
         }
     }
 
-    pub fn create_list<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<Vec<Value>> {
+    pub fn create_list<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<Value> {
         let mut values = Vec::new();
 
         while let Some(token) = tokens.get(self.index()) {
@@ -249,10 +242,10 @@ impl Parser {
             }
         }
 
-        Ok(values)
+        Ok(Value::List(values))
     }
 
-    pub fn create_table<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<Table> {
+    pub fn create_table<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<Value> {
         let mut values = HashMap::new();
 
         while let Some(token) = tokens.get(self.index()) {
@@ -261,11 +254,9 @@ impl Parser {
 
                 _ => {
                     let key = self.create_key(tokens)?;
-
                     self.next();
 
                     let value = self.create_value(tokens)?;
-
                     self.next();
 
                     values.insert(key, value);
@@ -273,7 +264,7 @@ impl Parser {
             }
         }
 
-        Ok(values)
+        Ok(Value::Table(values))
     }
 
     pub fn create_key<'a>(&mut self, tokens: &'a [TokenKind<'a>]) -> ParserResult<String> {

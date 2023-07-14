@@ -1,7 +1,3 @@
-use std;
-
-use std::error::Error;
-
 #[derive(Debug)]
 pub struct Pos {
     pub line: usize,
@@ -52,30 +48,32 @@ pub enum TokenKind<'a> {
 }
 
 #[derive(Debug)]
-pub struct TokenizerError {
+pub struct LexerError {
     pub desc: String,
 }
 
-impl std::fmt::Display for TokenizerError {
+impl std::fmt::Display for LexerError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl Error for TokenizerError {
+impl std::error::Error for LexerError {
     fn description(&self) -> &str {
         self.desc.as_str()
     }
 }
 
+type LexerResult<T> = Result<T, LexerError>;
+
 #[derive(Default)]
-pub struct Tokenizer {
+pub struct Lexer {
     index: usize,
     column: usize,
     line: usize,
 }
 
-impl Tokenizer {
+impl Lexer {
     #[inline]
     fn index(&self) -> usize {
         self.index
@@ -113,7 +111,7 @@ impl Tokenizer {
         }
     }
 
-    fn keyword<'a>(&mut self, source: &'a [u8]) -> Result<TokenKind<'a>, TokenizerError> {
+    fn keyword<'a>(&mut self, source: &'a [u8]) -> LexerResult<TokenKind<'a>> {
         let start = self.position();
 
         while let Some(b) = source.get(self.index()) {
@@ -146,7 +144,7 @@ impl Tokenizer {
         }
     }
 
-    fn number<'a>(&mut self, source: &'a [u8]) -> Result<TokenKind<'a>, TokenizerError> {
+    fn number<'a>(&mut self, source: &'a [u8]) -> LexerResult<TokenKind<'a>> {
         let mut point = false;
         let mut zero = false;
 
@@ -171,12 +169,12 @@ impl Tokenizer {
 
                 if let Some(b) = source.get(self.index()) {
                     if !b.is_ascii_digit() {
-                        return Err(TokenizerError {
+                        return Err(LexerError {
                             desc: format!("decimal point must be followed with a digit, not {}", b),
                         });
                     }
                 } else {
-                    return Err(TokenizerError {
+                    return Err(LexerError {
                         desc: "decimal point must be followed with a digit, but no bytes left"
                             .to_string(),
                     });
@@ -202,7 +200,7 @@ impl Tokenizer {
         }
     }
 
-    fn template_string<'a>(&mut self, source: &'a [u8]) -> Result<TokenKind<'a>, TokenizerError> {
+    fn template_string<'a>(&mut self, source: &'a [u8]) -> LexerResult<TokenKind<'a>> {
         self.next(); // skip opening tilde
 
         let start = self.position();
@@ -222,7 +220,7 @@ impl Tokenizer {
         }
 
         if source.get(self.index()).is_none() {
-            return Err(TokenizerError {
+            return Err(LexerError {
                 desc: "unterminated mutli line string".to_string(),
             });
         }
@@ -239,7 +237,7 @@ impl Tokenizer {
         })))
     }
 
-    fn string<'a>(&mut self, source: &'a [u8]) -> Result<TokenKind<'a>, TokenizerError> {
+    fn string<'a>(&mut self, source: &'a [u8]) -> LexerResult<TokenKind<'a>> {
         self.next(); // skip opening double quotes
 
         let start = self.position();
@@ -248,7 +246,7 @@ impl Tokenizer {
             match b {
                 b'"' => break,
                 b'\n' => {
-                    return Err(TokenizerError {
+                    return Err(LexerError {
                         desc: "cannot use newline character in strings".to_string(),
                     })
                 }
@@ -257,7 +255,7 @@ impl Tokenizer {
         }
 
         if source.get(self.index()).is_none() {
-            return Err(TokenizerError {
+            return Err(LexerError {
                 desc: "unterminated string".to_string(),
             });
         }
@@ -274,7 +272,7 @@ impl Tokenizer {
         })))
     }
 
-    fn ignore_comment(&mut self, source: &[u8]) -> Result<(), TokenizerError> {
+    fn ignore_comment(&mut self, source: &[u8]) -> LexerResult<()> {
         let start = self.position();
 
         self.next(); // skip identifier forward slash
@@ -287,7 +285,7 @@ impl Tokenizer {
                     self.next();
                 }
             } else {
-                return Err(TokenizerError {
+                return Err(LexerError {
                     desc: format!("unterminated comment ({}:{})", start.line, start.column),
                 });
             }
@@ -298,7 +296,7 @@ impl Tokenizer {
         Ok(())
     }
 
-    fn ignore_multiline_comment(&mut self, source: &[u8]) -> Result<(), TokenizerError> {
+    fn ignore_multiline_comment(&mut self, source: &[u8]) -> LexerResult<()> {
         let start = self.position();
 
         self.next(); // skip preceding opening slash
@@ -318,7 +316,7 @@ impl Tokenizer {
                     self.next();
                 }
             } else {
-                return Err(TokenizerError {
+                return Err(LexerError {
                     desc: format!("unterminated comment ({}:{})", start.line, start.column),
                 });
             }
@@ -327,7 +325,7 @@ impl Tokenizer {
         Ok(())
     }
 
-    fn comment(&mut self, source: &[u8]) -> Result<(), TokenizerError> {
+    fn comment(&mut self, source: &[u8]) -> LexerResult<()> {
         let start = self.position(); // save start position
 
         self.next(); // skip preceding opening slash
@@ -342,7 +340,7 @@ impl Tokenizer {
                 Ok(()) => Ok(()),
                 Err(e) => Err(e),
             },
-            Some(c) => Err(TokenizerError {
+            Some(c) => Err(LexerError {
                 desc: format!(
                     "expected '/' or '*' not '{}' ({}:{})",
                     *c as char,
@@ -351,7 +349,7 @@ impl Tokenizer {
                 ),
             }),
 
-            None => Err(TokenizerError {
+            None => Err(LexerError {
                 desc: format!(
                     "expected '/' or '*' but no bytes left ({}:{})",
                     start.line, start.column
@@ -361,15 +359,15 @@ impl Tokenizer {
     }
 
     pub fn new() -> Self {
-        Tokenizer {
+        Lexer {
             index: 0,
             column: 1,
             line: 1,
         }
     }
 
-    pub fn tokenize<'a>(&mut self, source: &'a [u8]) -> Result<Vec<TokenKind<'a>>, TokenizerError> {
-        let mut tokens = Vec::with_capacity(std::mem::size_of_val(source));
+    pub fn tokenize<'a>(&mut self, source: &'a [u8]) -> LexerResult<Vec<TokenKind<'a>>> {
+        let mut tokens = Vec::new();
 
         while let Some(b) = source.get(self.index()) {
             match b {
@@ -424,7 +422,7 @@ impl Tokenizer {
                     Err(e) => return Err(e),
                 },
                 _ => {
-                    return Err(TokenizerError {
+                    return Err(LexerError {
                         desc: format!(
                             "unrecognized character '{}' ({}:{})",
                             *b as char,
