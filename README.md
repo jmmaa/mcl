@@ -1,10 +1,9 @@
 # Mark's Configuration Language (MCL)
 
-Its an easy to use config toy language written in rust. I implemented this solely for practicing rust lifetimes.
+Its an easy to use config toy language written in rust. I implemented this solely for practicing rust lifetimes. 
 
 
 **Note: Still in development**
-
 
 # Introduction
 
