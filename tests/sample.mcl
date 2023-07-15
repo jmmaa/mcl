@@ -14,9 +14,11 @@ languages {
         rust "little"
 
 
-        mysample`
+        mysample `
         
-        python succcccksss`
+        Sample template!
+        
+        `
 
     }
 
