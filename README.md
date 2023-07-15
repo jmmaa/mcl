@@ -1,4 +1,4 @@
-# Marky's Configuration Language (MCL)
+# Mark's Configuration Language (MCL)
 
 Its an easy to use config toy language written in rust. I implemented this solely for practicing rust lifetimes.
 
@@ -6,92 +6,62 @@ Its an easy to use config toy language written in rust. I implemented this solel
 **Note: Still in development**
 
 
+# Introduction
 
-# Syntax
+Generally, you can think of this config language as `json`, except without commas and colons.
 
-This 
-
+This `mcl` object
 ```
-jmmaa {
 
-    github "https://github.com/jmmaa"
-
-    repositories 26
-
-    about "\nJust Me!\n"
+mcl {
+    repository "https://github.com/jmmaa/mcl"
+    stars 0
 }
 
-languages {
+```
+is equivalent to `json` object below
 
-    low_level {
-
-        rust "little"
-
-    }
-    
-    high_level {
-
-        python "fluent"
-
-        typescript "fluent"
-    }
-
+```
+"mcl": {
+    "repository": "https://github.com/jmmaa/mcl",
+    "stars": 0
 }
 
 ```
 
-translates to 
+Unlike `json`, you can use template string literals in here by enclosing the string with backticks
 
-```rust
-// its unordered!
-
-Table(
-    {
-        "jmmaa": Table(
-            {
-                "about": String("\nJust Me!\n"),
-                "repositories": Integer(26),
-                "github": String("https://github.com/jmmaa")
-            }
-        ),
-        "languages": Table(
-            {
-                "low_level": Table(
-                    {
-                        "rust": String("little")
-                    }
-                ),
-                "high_level": Table(
-                    {
-                        "typescript": String("fluent"),
-                        "python": String("fluent")
-                    }
-                )
-            }
-        )
-    }
-)
 ```
-
+mcl {
+    template_string `MY TEMPLATE STRING`
+    normal_string   "hello I am simple string"
+}
+```
+TODO
 
 # How to use
 
 ```rust
-
-use mcl::{Parser, Tokenizer};
+use mcl;
 
 fn main() {
 
-    let file = std::fs::read("./sample.mcl").unwrap();
+    let output = mcl::from_str(
+        r#"
+        
+        foo {
+    
+            bar "baz"
+        }
+        
+        "#,
+    )
+    .unwrap();
 
-    let mut tokenizer = Tokenizer::new();
-    let tokens = tokenizer.tokenize(&file).unwrap();
+    // getting value of "bar"
+    let val = &output["foo"]["bar"].as_str();
 
-    let mut parser = Parser::new();
-    let output = parser.parse(&tokens).unwrap();
-
-    println!("{:?}", output);
+    assert!(val == &Some("baz"));
 }
-
 
 ```
